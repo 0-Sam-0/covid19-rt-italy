@@ -1,0 +1,244 @@
+\documentclass[12pt, a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[italian]{babel}
+\usepackage{amsmath, amssymb}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{array}       % modificatori colonna >{\raggedright}
+\usepackage{xcolor}
+\usepackage{parskip}
+\usepackage{hyperref}
+\usepackage{xurl}        % spezza URL a /, ., _, - ecc. (caricato dopo hyperref)
+
+\geometry{margin=2.5cm}
+\setlength{\emergencystretch}{3em}   % flessibilità extra contro overfull hbox
+
+% Tipo colonna comodo: paragrafo con testo a sinistra
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    urlcolor=blue!70!black,
+}
+
+\title{\textbf{Fonti dei dati}\\[0.3em]
+       \large Progetto COVID-19 — MSN}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ---------------------------------------------------------------------------
+\section{\texttt{iss-covid19.csv} — Casi per data di prelievo/diagnosi (ISS)}
+
+\textbf{Sito:}
+\url{https://www.epicentro.iss.it/coronavirus/sars-cov-2-sorveglianza-dati}
+
+\textbf{File originale:}
+\url{https://www.epicentro.iss.it/coronavirus/open-data/covid_19-iss.xlsx}\\
+(foglio \texttt{casi\_prelievo\_diagnosi}, colonne: \texttt{DATA\_PRELIEVO} e \texttt{CASI})
+
+\textbf{Formato nel progetto:} CSV con separatore \texttt{;}, intestazione
+\texttt{DATA\_PRELIEVO\_DIAGNOSI;CASI}, date nel formato \texttt{dd/MM/yyyy}.
+
+\textbf{Copertura:} 29/01/2020 – 06/01/2026 (2171 righe). Il valore
+\texttt{08/01/2026} presente nel file originale è la data di aggiornamento del
+dataset, non un dato epidemiologico.
+
+\textbf{Note:} I casi sono per \textbf{data di prelievo} (o data diagnosi).
+Questa è più vicina alla data reale di infezione rispetto alla data di referto
+DPC, ma più tardiva rispetto alla data di inizio sintomi usata da ISS per il
+calcolo ufficiale di Rt.
+
+\textbf{Fogli presenti nell'xlsx (verificato):}
+
+% Larghezze: 3.8 + 5.0 + 5.0 = 13.8cm  (testo ~16cm, spazio colonne ~0.85cm)
+\begin{table}[h!]
+\small
+\begin{tabular}{@{} L{3.8cm} L{5.0cm} L{5.0cm} @{}}
+\toprule
+\textbf{Foglio} & \textbf{Contenuto} & \textbf{Variabili chiave} \\
+\midrule
+\texttt{casi\_prelievo\_diagnosi}
+    & Casi per data prelievo/diagnosi (\textbf{usato})
+    & \texttt{DATA\_PRELIEVO\_DIAGNOSI}, \texttt{CASI} \\[4pt]
+\texttt{casi\_regioni}
+    & Casi cumulativi per regione/PA
+    & \texttt{NOME\_NUTS2}, \texttt{CASI\_CUMULATIVI} \\[4pt]
+\texttt{casi\_province}
+    & Casi cumulativi per provincia di residenza
+    & \texttt{COD\_PROV}, \texttt{PROV\_names},
+      \texttt{CASI\_CUMULATIVI} \\[4pt]
+\texttt{ricoveri}
+    & Ricoveri per data di ricovero
+    & \texttt{DATARICOVERO1}, \texttt{RICOVERI} \\[4pt]
+\texttt{decessi}
+    & Decessi per data di decesso
+    & \texttt{DATA\_DECESSO}, \texttt{DECESSI} \\[4pt]
+\texttt{sesso\_eta}
+    & Casi/decessi per sesso e fascia d'età
+    & \texttt{SESSO}, \texttt{AGE\_GROUP},
+      \texttt{CASI\_CUMULATIVI}, \texttt{DECEDUTI} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Il foglio con i casi sintomatici per data di inizio sintomi NON è
+presente.} ISS non pubblica quei dati come open data. Il proxy
+\texttt{nuovi\_positivi} DPC è quindi l'unica alternativa ragionevole per il
+Metodo 2 del progetto.
+
+\textbf{Archivi storici per anno:}
+\begin{itemize}
+    \item 2025: \url{https://www.epicentro.iss.it/coronavirus/open-data/OPENDATA-2025.zip}
+    \item 2024: \url{https://www.epicentro.iss.it/coronavirus/open-data/OPENDATA-2024.zip}
+    \item 2023: \url{https://www.epicentro.iss.it/coronavirus/open-data/OPENDATA-2023.zip}
+    \item 2022: \url{https://www.epicentro.iss.it/coronavirus/open-data/OPENDATA-2022.zip}
+    \item 2021: \url{https://www.epicentro.iss.it/coronavirus/open-data/OPENDATA-2021.zip}
+    \item 2020: \url{https://www.epicentro.iss.it/coronavirus/open-data/OPENDATA-2020.zip}
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{\texttt{dpc-covid19.json} — Andamento nazionale (Protezione Civile)}
+
+\textbf{Repository GitHub:}\\
+\url{https://github.com/pcm-dpc/COVID-19/blob/master/dati-json/dpc-covid19-ita-andamento-nazionale.json}
+
+\textbf{Formato:} array JSON, un oggetto per ogni giorno. Campi rilevanti per
+il progetto:
+\begin{itemize}
+    \item \texttt{data}: timestamp nel formato \texttt{yyyy-MM-ddTHH:mm:ss}
+          (va troncato al giorno)
+    \item \texttt{nuovi\_positivi}: nuovi positivi per \textbf{data di
+          referto} — usato come $C(t)$ nel Metodo 1 (DPC) e Metodo 2
+    \item \texttt{totale\_positivi}: attualmente positivi — usato come $I(t)$
+          diretto nel Metodo 1 (DPC)
+\end{itemize}
+
+\textbf{Copertura:} 24/02/2020 in poi.
+
+\textbf{Note:} Nel dataset scaricato \texttt{nuovi\_positivi} non presenta
+valori negativi; il campo con valori negativi è
+\texttt{variazione\_totale\_positivi} (differenza giornaliera di
+\texttt{totale\_positivi}), che il codice non legge. Il \texttt{max(np, 0)}
+presente in \texttt{carica\_dati.m} è comunque una misura difensiva: nella
+storia del repository DPC ci sono stati episodi in cui correzioni retroattive
+hanno prodotto \texttt{nuovi\_positivi} negativi (es.\ storno di duplicati
+regionali), e la clausola garantisce robustezza qualora il file venisse
+aggiornato con versioni precedenti o versioni future del dataset.
+
+% ---------------------------------------------------------------------------
+\section{\texttt{infn-rt.csv} — Rt ufficiale INFN CovidStat}
+
+\textbf{Sito:} \url{https://covid19.infn.it/sommario/rt.html}\\
+(dati estratti dal grafico interattivo della pagina — il certificato TLS del
+dominio \texttt{covid19.infn.it} risulta non valido da browser, ma la pagina è
+accessibile manualmente)
+
+\textbf{Pagina metodologia:} \url{https://covid19.infn.it/sommario/rt-info.html}
+
+\textbf{Pagina dati ISS (grafici Rt da sintomatici):}
+\url{https://covid19.infn.it/iss/}
+
+\textbf{Formato:} CSV con separatore \texttt{;}, decimale \texttt{,}. Colonne:
+\begin{center}
+{\small\ttfamily
+giorno; rt; stat95\_upper; stat95\_lower; ci68\_lower;\\[2pt]
+ci68\_upper; ci95\_lower; ci95\_upper}
+\end{center}
+
+\textbf{Copertura:} 18/03/2020 – 30/03/2023.
+
+\textbf{Note:} Il progetto usa le colonne \texttt{rt} (valore centrale),
+\texttt{ci95\_lower} e \texttt{ci95\_upper} (intervallo di confidenza al 95\%).
+
+% ---------------------------------------------------------------------------
+\section{Metodologia INFN/ISS per il calcolo di Rt}
+
+\textbf{Algoritmo:} EpiEstim (pacchetto R) — Cori et al.,
+\textit{American Journal of Epidemiology}, 2013.\\
+DOI: \url{https://doi.org/10.1093/aje/kwt133}
+
+\textbf{Blog tecnico INFN:}
+\url{https://covidblog.infn.it/rt-e-linferenza-bayesiana-questa-sconosciuta/}
+
+\subsection{Formula base (identica al Metodo 2 del progetto)}
+
+\begin{equation}
+    \mathbb{E}[I(t)] = R(t) \sum_{s=1}^{S} w(s)\, I(t-s)
+\end{equation}
+
+dove $w(s)$ è la distribuzione del tempo di generazione (= $\varphi(s)$ nel
+codice).
+
+\subsection{Distribuzione dei tempi di generazione (Cereda et al.)}
+
+Distribuzione Gamma con parametri: \textbf{shape} $\alpha = 1.87$
+(SD $= 0.26$), \textbf{rate} $\beta = 0.28$ (SD $= 0.04$) $\Rightarrow$
+scala $\theta = 1/\beta \approx 3.57$ giorni, media $= \alpha\theta \approx
+6.6$ giorni.
+
+Fonte: Cereda et al. — esattamente i parametri usati in \texttt{phi\_gamma.m}.
+
+\subsection{Stima bayesiana: EpiEstim vs Metodo 2 del progetto}
+
+% Larghezze: 3.5 + 5.5 + 5.0 = 14.0cm
+\begin{table}[h!]
+\small
+\begin{tabular}{@{} L{3.5cm} L{5.5cm} L{5.0cm} @{}}
+\toprule
+\textbf{Aspetto}
+    & \textbf{EpiEstim (INFN/ISS ufficiale)}
+    & \textbf{Metodo 2 (progetto, Metropolis)} \\
+\midrule
+Finestra di stima
+    & 7 giorni scorrevoli (sliding window)
+    & 1 giorno (per singolo $t$) \\[4pt]
+Posteriore
+    & Gamma analitica (coniugata Poisson-Gamma)
+    & Campionata con MCMC (Metropolis) \\[4pt]
+Prior su $R(t)$
+    & Gamma(5, 5) — configurabile
+    & Nessuno (MLE) \\[4pt]
+Implementazione
+    & R — pacchetto EpiEstim
+    & MATLAB/Octave — da zero \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Posteriore analitica di Cori}
+
+Con prior $\mathrm{Gamma}(a, b)$ e likelihood Poisson su una finestra
+$[t-\tau+1,\, t]$, la posteriore è esattamente:
+
+\begin{equation}
+    R(t)\mid\text{dati}
+    \;\sim\;
+    \mathrm{Gamma}\!\left(
+        a + \sum_{k=t-\tau+1}^{t} I(k),\quad
+        b + \sum_{k=t-\tau+1}^{t} \Lambda(k)
+    \right)
+\end{equation}
+
+dove $\Lambda(k) = \sum_s w(s)\, I(k-s)$. Non serve MCMC: è analitica.
+
+Il Metodo 2 del progetto approssima la stessa posteriore con $\tau=1$
+(singolo giorno) tramite Metropolis. Per grandi $I(t)$ le due stime
+convergono.
+
+\subsection{Dati usati da ISS per Rt ufficiale}
+
+ISS usa esclusivamente i \textbf{casi sintomatici} per \textbf{data di inizio
+sintomi}, non i nuovi positivi DPC (data referto) né i casi ISS per data di
+prelievo. Questo riduce il ritardo tra infezione e notifica e produce la stima
+più accurata temporalmente.
+
+\end{document}

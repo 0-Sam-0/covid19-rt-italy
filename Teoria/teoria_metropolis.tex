@@ -1,0 +1,944 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[italian]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[expansion=false]{microtype}
+\usepackage{parskip}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{mathtools}
+
+\geometry{margin=2.5cm, top=3cm, bottom=3cm}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!70!black,
+  urlcolor=blue!70!black,
+}
+
+\tcbuselibrary{skins, breakable}
+
+% Box per definizioni
+\newtcolorbox{definizione}[1][]{
+  colback=blue!5!white, colframe=blue!60!black,
+  fonttitle=\bfseries, title=Definizione,
+  breakable, #1
+}
+
+% Box per osservazioni importanti
+\newtcolorbox{osservazione}[1][]{
+  colback=orange!8!white, colframe=orange!70!black,
+  fonttitle=\bfseries, title=Osservazione,
+  breakable, #1
+}
+
+% Box per il riepilogo
+\newtcolorbox{riepilogo}[1][]{
+  colback=green!5!white, colframe=green!60!black,
+  fonttitle=\bfseries, title=Riepilogo,
+  breakable, #1
+}
+
+% Shorthand
+\newcommand{\Rt}{R(t)}
+\newcommand{\lbase}{\lambda_{\mathrm{base}}}
+\newcommand{\loglik}{\ell}
+\newcommand{\Smax}{S_{\max}}
+
+\title{%
+  \textbf{Stima di $R(t)$ con il metodo \mbox{Monte Carlo -- Metropolis}}\\[0.5em]
+  \large Materiale di studio generato per approfondire i fondamenti teorici\\[0.3em]
+  \normalsize Esame MSN --- Modellazione e Simulazioni Numeriche
+}
+\author{Samuel Seligardi \& Claude Code}
+\date{A.A. 2025/2026}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ===========================================================================
+\section{Contesto e motivazione}
+% ===========================================================================
+
+Il \textbf{numero di riproduzione effettivo} $R(t)$ è la quantità epidemiologica centrale
+per monitorare un'epidemia: rappresenta il numero medio di nuovi infetti generati da un
+singolo caso infettivo nel giorno $t$, tenendo conto delle misure di contenimento e
+dell'immunità parziale della popolazione.
+
+\begin{itemize}
+  \item $R(t) > 1$: l'epidemia è in crescita (ogni caso genera in media più di un secondario)
+  \item $R(t) = 1$: l'epidemia è stazionaria
+  \item $R(t) < 1$: l'epidemia è in regressione
+\end{itemize}
+
+Il Metodo~1 (SIR) stima $R(t)$ tramite la formula approssimata
+$R(t) \approx 1 + T_R \cdot \Delta I / I$, che dipende dal parametro $T_R = 1/\gamma$
+e introduce un ritardo strutturale di circa una settimana.
+
+Il \textbf{Metodo~2} (implementato dalla metodologia ISS/FBK, Merler 2020)
+usa un approccio completamente diverso:
+\begin{enumerate}
+  \item modella esplicitamente la \emph{distribuzione dei tempi di generazione} $\phi(s)$;
+  \item usa un modello statistico Poisson per i nuovi contagi;
+  \item stima $R(t)$ tramite un algoritmo Metropolis applicato \emph{indipendentemente}
+        per ogni giorno.
+\end{enumerate}
+
+Vantaggi principali rispetto al Metodo~1:
+\begin{itemize}
+  \item non richiede la conoscenza di $\gamma$ (o $T_R$);
+  \item fornisce una stima che anticipa il dato INFN di circa una settimana;
+  \item è più accurato (errore massimo $0.20$--$0.27$ vs $0.2$--$0.6$ del SIR).
+\end{itemize}
+
+% ===========================================================================
+\section{Il numero di riproduzione: dall'equazione di rinnovo}
+% ===========================================================================
+
+\subsection{L'equazione di Lotka--Euler}
+
+Il punto di partenza del Metodo~2 è l'equazione di rinnovo (nota anche come
+\emph{equazione di Lotka--Euler} in demografia):
+\begin{equation}
+  C(t) = R(t) \sum_{s=1}^{\infty} \phi(s)\, C(t-s)
+  \label{eq:rinnovo}
+\end{equation}
+dove:
+\begin{itemize}
+  \item $C(t)$ = nuovi casi (sintomatici) al giorno $t$;
+  \item $\phi(s)$ = probabilità che un contagio avvenga $s$ giorni dopo l'infezione
+        del caso primario (\emph{distribuzione del tempo di generazione});
+  \item $R(t)$ = numero di riproduzione al giorno $t$, la quantità da stimare.
+\end{itemize}
+
+\begin{osservazione}
+L'equazione~\eqref{eq:rinnovo} non è un'approssimazione: è la definizione operativa
+di $R(t)$ nel contesto dei modelli a rinnovo (renewal models). Il modello SIR ne è
+un caso speciale con $\phi(s) = \gamma e^{-\gamma s}$ (distribuzione esponenziale
+con parametro $\gamma$).
+\end{osservazione}
+
+\subsection{Riscrittura con la base}
+
+Per un giorno $t$ fissato, il termine $\sum_s \phi(s)\,C(t-s)$ è una costante nota
+(dipende solo dalla storia passata, non da $R(t)$). Lo chiamiamo \textbf{base}:
+\begin{equation}
+  \lbase(t) \;=\; \sum_{s=1}^{\Smax} \phi(s)\, C(t-s)
+  \label{eq:lbase}
+\end{equation}
+dove il troncamento a $\Smax = 25$ giorni è giustificato perché $\phi(s) < 2 \times 10^{-3}$
+per $s > 25$ (si veda la Sezione~\ref{sec:phi}).
+
+L'equazione di rinnovo~\eqref{eq:rinnovo} diventa allora:
+\begin{equation}
+  \boxed{\lambda(t) \;=\; R(t) \cdot \lbase(t)}
+  \label{eq:lambda}
+\end{equation}
+dove $\lambda(t)$ è il \emph{numero atteso} di nuovi casi al giorno $t$.
+
+% ===========================================================================
+\section{La distribuzione dei tempi di generazione $\phi(s)$}
+\label{sec:phi}
+% ===========================================================================
+
+\subsection{Significato biologico}
+
+Il \textbf{tempo di generazione} $X$ è la variabile aleatoria che misura il ritardo,
+in giorni, tra il momento in cui un individuo viene infettato e il momento in cui
+infetta a sua volta un caso secondario. Non è direttamente osservabile: si stima
+indirettamente dall'analisi di cluster di casi con coppie infettante--infettato tracciate.
+
+La distribuzione $\phi(s) = P(X = s)$ (discreta, definita su $s = 1, 2, 3, \ldots$)
+è cruciale perché determina quanta ``memoria storica'' entra nel calcolo di $\lambda(t)$:
+un $\phi$ con coda lunga significa che casi molto vecchi contribuiscono ancora
+alla trasmissione odierna.
+
+\subsection{La distribuzione Gamma continua}
+
+Guzzetta e Merler (7 dicembre 2020) stimano per COVID-19 in Italia che il tempo di
+generazione \emph{continuo} $X$ segue una distribuzione Gamma:
+\begin{equation}
+  X \sim \mathrm{Gamma}(\alpha,\, \theta) \qquad \alpha = 1.87, \quad \theta = \frac{1}{\beta} = \frac{1}{0.28} \approx 3.57\ \text{giorni}
+\end{equation}
+con densità di probabilità:
+\begin{equation}
+  f(x;\,\alpha,\theta) \;=\; \frac{x^{\alpha-1}\, e^{-x/\theta}}{\Gamma(\alpha)\, \theta^{\alpha}}, \qquad x > 0
+  \label{eq:gamma_pdf}
+\end{equation}
+dove $\Gamma(\alpha) = \int_0^\infty t^{\alpha-1} e^{-t}\, dt$ è la \textbf{funzione Gamma
+di Eulero} (non la distribuzione Gamma: attenzione alla notazione sovraccarica).
+
+I momenti della distribuzione Gamma sono:
+\begin{align}
+  \mathbb{E}[X] &= \alpha \theta \approx 1.87 \times 3.57 \approx 6.68\ \text{giorni} \\
+  \mathrm{Var}[X] &= \alpha \theta^2 \approx 1.87 \times 12.74 \approx 23.8\ \text{giorni}^2 \\
+  \sigma_X &= \sqrt{\mathrm{Var}[X]} \approx 4.88\ \text{giorni}
+\end{align}
+
+La distribuzione è \textbf{asimmetrica a destra} (il coefficiente di asimmetria vale
+$2/\sqrt{\alpha} \approx 1.46$): la maggior parte dei contagi avviene entro 5--10 giorni, con una coda
+che si estende fino a 20--25 giorni. Questo è tipico dei processi biologici: esistono
+casi rari di trasmissione tardiva (contatti prolungati, casi gravi con lunga infettività).
+
+\begin{osservazione}[title=Perché la Gamma?]
+La distribuzione Gamma è la scelta naturale per modellare tempi positivi con asimmetria
+a destra. È inoltre la somma di $\alpha$ variabili esponenziali indipendenti con parametro
+$\beta$ (per $\alpha$ intero), il che le conferisce una interpretazione biologica:
+il processo di trasmissione può avvenire in $\alpha$ ``stadi'' successivi.
+Per $\alpha = 1$ si riduce all'esponenziale (il caso del modello SIR compartimentale).
+\end{osservazione}
+
+\subsection{Discretizzazione}
+
+Il modello lavora con \textbf{giorni interi}, ma $X$ è continua. La probabilità discreta
+$\phi(s)$ si ottiene integrando $f$ sull'intervallo unitario centrato in $s$:
+\begin{equation}
+  \phi(s) \;=\; P\!\left(s - \tfrac{1}{2} \le X \le s + \tfrac{1}{2}\right)
+          \;=\; \int_{s-1/2}^{s+1/2} f(u;\,\alpha,\theta)\, du, \qquad s = 1, 2, \ldots
+  \label{eq:phi_discreta}
+\end{equation}
+
+Questa è la discretizzazione di \emph{midpoint binning}: ogni valore intero cattura
+l'intera probabilità dell'intervallo unitario centrato su di esso. È il metodo corretto
+per discretizzare una densità continua (a differenza di campionare $f(s)$ puntualmente,
+che non dà una distribuzione di probabilità).
+
+\textbf{Troncamento:} per $s > 25$, il contributo $\phi(s)$ è trascurabile. Si verifica
+che $\sum_{s=26}^\infty \phi(s) \approx 5.2 \times 10^{-3}$, cioè lo 0.52\% della
+probabilità totale. Si pone quindi $\Smax = 25$ e si \textbf{rinormalizza}:
+\begin{equation}
+  \phi(s) \;\leftarrow\; \frac{\phi(s)}{\sum_{k=1}^{25} \phi(k)}, \qquad s = 1, \ldots, 25
+\end{equation}
+affinché il vettore $(\phi(1), \ldots, \phi(25))$ sia una distribuzione di probabilità discreta.
+
+\subsection{Valori numerici attesi}
+
+\begin{center}
+\begin{tabular}{cccccccccc}
+\toprule
+$s$ (giorni) & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & $\cdots$ \\
+\midrule
+$\phi(s)$ (approx.) & 0.073 & 0.103 & 0.111 & 0.108 & 0.099 & 0.088 & 0.076 & 0.064 & $\cdots$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+La media $\sum_s s\,\phi(s) \approx 6.65$ giorni deve coincidere con la media teorica
+della Gamma (a meno dell'errore di troncamento). Questa è la prima verifica di
+correttezza da eseguire in MATLAB.
+
+% ===========================================================================
+\section{Il modello statistico: distribuzione di Poisson}
+% ===========================================================================
+
+\subsection{Motivazione}
+
+Dato $R(t)$ e la storia passata $C(t-1), \ldots, C(t-25)$, il numero di nuovi casi
+$C(t)$ è una variabile aleatoria. Il modello adottato è:
+\begin{equation}
+  C(t) \mid R(t) \;\sim\; \mathrm{Poisson}\!\left(\lambda(t)\right) = \mathrm{Poisson}\!\left(R(t)\cdot\lbase(t)\right)
+  \label{eq:poisson}
+\end{equation}
+
+La distribuzione di Poisson è giustificata da due argomenti:
+
+\begin{enumerate}
+  \item \textbf{Argomento del processo puntuale}: in ogni istante, un individuo infettivo
+        ha una piccola probabilità di trasmettere il virus. Se i contatti sono indipendenti
+        e la probabilità di trasmissione è piccola ma il numero di individui suscettibili
+        è grande, il numero di trasmissioni segue una Poisson (\emph{legge dei grandi numeri
+        per processi di Bernoulli rari}).
+
+  \item \textbf{Argomento della superspreading}: anche in presenza di eterogeneità
+        (alcuni individui trasmettono molto di più di altri), il conteggio aggregato
+        giornaliero si approssima bene con una Poisson per grandi popolazioni.
+\end{enumerate}
+
+La probabilità di massa della Poisson è:
+\begin{equation}
+  P\!\left(C(t) = c \;\middle|\; R(t)\right) \;=\; \frac{e^{-\lambda(t)}\, \lambda(t)^c}{c!}, \qquad c = 0, 1, 2, \ldots
+\end{equation}
+
+\begin{osservazione}
+La Poisson ha un solo parametro $\lambda$ che funge sia da media che da varianza:
+$\mathbb{E}[C] = \mathrm{Var}[C] = \lambda$. Ne consegue che la deviazione standard
+relativa è $\sigma_C / \mathbb{E}[C] = 1/\sqrt{\lambda}$: la stima di $R(t)$ sarà
+tanto più precisa quanto più grande è $\lambda(t)$, ossia quanto più casi ci sono.
+\end{osservazione}
+
+% ===========================================================================
+\section{La funzione di verosimiglianza e il massimo di verosimiglianza}
+\label{sec:lik}
+% ===========================================================================
+
+\subsection{Log-verosimiglianza}
+
+Per un giorno $t$ fissato, con $\lbase(t)$ nota, vogliamo stimare $R(t)$ dall'osservazione
+di $C(t) = c$. La \textbf{funzione di verosimiglianza} è:
+\begin{equation}
+  L(R) \;=\; P\!\left(C(t) = c \;\middle|\; R\right) \;=\; \frac{e^{-R\lbase}\,(R\lbase)^c}{c!}
+\end{equation}
+dove, per brevità, scriviamo $\lbase = \lbase(t)$.
+
+La \textbf{log-verosimiglianza} è:
+\begin{align}
+  \ell(R) &= \log L(R) = -R\lbase + c\,\log(R\lbase) - \log(c!) \notag \\
+           &= c\,\log R \;+\; c\,\log\lbase \;-\; R\lbase \;-\; \log(c!)
+  \label{eq:loglik}
+\end{align}
+
+I termini $c\,\log\lbase$ e $-\log(c!)$ sono costanti rispetto a $R$: non influenzano
+la posizione del massimo.
+
+\subsection{Massimo di verosimiglianza (MLE)}
+
+Deriviamo $\ell(R)$ rispetto a $R$ e uguagliamo a zero:
+\begin{equation}
+  \frac{d}{dR}\,\ell(R) \;=\; \frac{c}{R} - \lbase \;=\; 0
+\end{equation}
+da cui:
+\begin{equation}
+  \boxed{R_{\mathrm{MLE}} \;=\; \frac{c}{\lbase} \;=\; \frac{C(t)}{\lbase(t)}}
+  \label{eq:mle}
+\end{equation}
+
+Per verificare che sia un massimo (e non un minimo), calcoliamo la derivata seconda:
+\begin{equation}
+  \frac{d^2}{dR^2}\,\ell(R) \;=\; -\frac{c}{R^2} \;<\; 0 \quad \text{per } R > 0,\, c > 0
+\end{equation}
+Poiché la derivata seconda è strettamente negativa, $\ell(R)$ è \textbf{strettamente concava}
+su $R > 0$, e $R_{\mathrm{MLE}}$ è l'unico massimo globale.
+
+\begin{osservazione}
+Il risultato $R_{\mathrm{MLE}} = C(t)/\lbase(t)$ ha un'interpretazione intuitiva diretta:
+$R(t)$ è il rapporto tra i casi osservati oggi e il numero di casi atteso se $R(t) = 1$.
+\end{osservazione}
+
+\subsection{Perché non usare direttamente l'MLE?}
+
+L'MLE è la stima puntuale ottimale per $c$ grande (caso asintotico). Per $c$ piccolo,
+la distribuzione di Poisson è fortemente asimmetrica, e la \emph{media della distribuzione
+a posteriori} è preferibile al massimo per due motivi.
+
+\medskip
+\noindent\textit{Nota di notazione (anticipazione):} nella Sezione~\ref{sec:bayes} verrà
+introdotta formalmente la \textbf{distribuzione a posteriori} $\pi(R \mid c)$, ovvero
+la densità di probabilità per il parametro $R$ \emph{dopo} aver osservato il dato $c$.
+Qui la lettera $\pi$ (con argomento) non è la costante $\pi \approx 3.14\ldots$, ma
+la notazione statistica standard per una densità di probabilità; il simbolo
+``$\mid c$'' si legge ``dato $c$'' (condizionato all'osservazione $c$).
+
+\begin{enumerate}
+  \item \textbf{Asimmetria}: quando $c$ è piccolo, la distribuzione posteriore
+        $\pi(R \mid c) \propto e^{\ell(R)}$ è asimmetrica a destra. La media è spostata
+        verso valori più alti rispetto all'MLE (il massimo). Usare la media riduce
+        l'errore quadratico medio (\emph{bias-variance tradeoff}).
+
+  \item \textbf{Quantificazione dell'incertezza}: il campionamento Metropolis produce
+        naturalmente una distribuzione di campioni da $\pi(R \mid c)$, permettendo di
+        calcolare intervalli di confidenza senza ipotesi aggiuntive.
+\end{enumerate}
+
+Per $c \to \infty$, la Poisson converge a una Gaussiana e la media coincide con il
+massimo: $\mathbb{E}_{\pi}[R \mid c] \to R_{\mathrm{MLE}}$ (per il Teorema del Limite Centrale).
+
+% ===========================================================================
+\section{Approccio Bayesiano: la distribuzione posteriore}
+\label{sec:bayes}
+% ===========================================================================
+
+\subsection{Notazione: $\pi(\cdot)$ come densità di probabilità}
+
+\begin{osservazione}[title=Disambiguazione: $\pi(\cdot)$ non è la costante $3.14\ldots$]
+In questo documento --- e in quasi tutta la letteratura statistica --- la lettera
+$\pi$ \emph{con un argomento} (come $\pi_0(R)$ o $\pi(R \mid c)$) indica una
+\textbf{funzione di densità di probabilità}. Questo uso è completamente distinto dalla
+costante matematica $\pi \approx 3.14159\ldots$
+
+Quando scriviamo $\pi(R \mid c)$ intendiamo: \emph{``la densità di probabilità della
+variabile aleatoria $R$, condizionata all'osservazione $c$''}. L'argomento a sinistra
+della barra verticale è la variabile; quello a destra è il dato su cui condizioniamo.
+\end{osservazione}
+
+\subsection{Il framework Bayesiano: tre ingredienti}
+
+Nell'approccio \textbf{frequentista} usato finora per l'MLE, il parametro $R(t)$ è
+trattato come una costante ignota: si cerca il valore che massimizza $L(R)$.
+
+Nell'approccio \textbf{Bayesiano}, invece, il parametro ignoto $R(t)$ è trattato come
+una \emph{variabile aleatoria}: se ne descrive la distribuzione di probabilità, che viene
+aggiornata man mano che si osservano i dati. I tre ingredienti sono:
+
+\begin{enumerate}
+  \item \textbf{Distribuzione a priori} (\emph{prior}): $\pi_0(R)$.\\
+        È la densità di probabilità per $R(t)$ \emph{prima} di osservare il dato
+        $C(t) = c$. Codifica la conoscenza (o l'ignoranza) iniziale sul parametro.
+        Il pedice $0$ distingue il prior dalla distribuzione aggiornata.
+
+  \item \textbf{Verosimiglianza}: $L(R) = P\!\left(C(t) = c \mid R\right)$.\\
+        Già calcolata nella Sezione~\ref{sec:lik}: misura la compatibilità tra il
+        valore del parametro $R$ e il dato osservato $c$. È una funzione di $R$,
+        \emph{non} una probabilità per $R$.
+
+  \item \textbf{Distribuzione a posteriori} (\emph{posterior}): $\pi(R \mid c)$.\\
+        È la densità di probabilità per $R(t)$ \emph{dopo} aver osservato $c$.
+        Combina l'informazione del prior con quella contenuta nel dato.
+        È l'oggetto che Metropolis campionerà.
+\end{enumerate}
+
+Il legame tra le tre componenti è il \textbf{Teorema di Bayes}:
+\begin{equation}
+  \pi(R \mid c)
+  \;=\;
+  \frac{L(R)\cdot\pi_0(R)}{\displaystyle\int_0^{\infty} L(R')\cdot\pi_0(R')\,dR'}
+  \label{eq:bayes_formula}
+\end{equation}
+Il denominatore $Z = \int_0^{\infty} L(R')\,\pi_0(R')\,dR'$ è la
+\textbf{costante di normalizzazione} (chiamata anche \emph{evidenza}): è un numero
+reale positivo che dipende solo dal dato $c$ e garantisce che
+$\int_0^\infty \pi(R \mid c)\,dR = 1$. Poiché $Z$ è una costante rispetto a $R$,
+si può scrivere in forma proporzionale:
+\begin{equation}
+  \pi(R \mid c) \;\propto\; L(R)\cdot\pi_0(R)
+  \label{eq:bayes_prop}
+\end{equation}
+Questa forma è sufficiente per l'algoritmo Metropolis, che non ha mai bisogno
+di calcolare $Z$ esplicitamente (vedi Sezione~\ref{sec:metro}).
+
+\subsection{Prior uniforme e prior improprio}
+
+Adottiamo un \textbf{prior uniforme} su $R > 0$:
+\begin{equation}
+  \pi_0(R) \;\propto\; 1, \qquad R > 0
+\end{equation}
+Questo prior esprime la \emph{completa assenza di informazione a priori}: nessun
+valore di $R(t)$ è considerato più plausibile degli altri prima di guardare i dati.
+
+Il termine \textbf{improprio} (\emph{improper prior}) indica che questo prior non è
+una vera distribuzione di probabilità nel senso classico, perché
+$\int_0^{\infty} 1\,dR = +\infty$: non è normalizzabile a~1. I prior impropri sono
+comunque accettati in statistica Bayesiana a condizione che la distribuzione a
+posteriori risultante sia \emph{propria} (abbia integrale finito). Verifichiamo
+questa condizione nel paragrafo successivo.
+
+\subsection{La distribuzione posteriore esplicita}
+
+Sostituendo $\pi_0(R) \propto 1$ nella~\eqref{eq:bayes_prop}:
+\begin{equation}
+  \pi(R \mid c) \;\propto\; L(R)\cdot 1 \;=\; L(R)
+  \label{eq:posteriore}
+\end{equation}
+Con prior uniforme, la posteriore \emph{coincide con la verosimiglianza}
+(a meno della costante di normalizzazione). Sostituendo la forma esplicita di $L(R)$:
+\begin{equation}
+  \pi(R \mid c) \;\propto\; R^c\, e^{-R\lbase}, \qquad R > 0
+\end{equation}
+Questo è esattamente il nucleo di una distribuzione \textbf{Gamma}:
+$R \mid c \;\sim\; \mathrm{Gamma}(c+1,\; 1/\lbase)$.
+
+L'integrale $\int_0^\infty R^c e^{-R\lbase}\,dR = \Gamma(c+1)/\lbase^{c+1}$ è finito
+per ogni $c \ge 0$, confermando che la posteriore è propria (nonostante il prior
+fosse improprio).
+
+La \textbf{media posteriore} (stimatore ottimo sotto perdita quadratica, detto
+\emph{stimatore di Bayes}) è:
+\begin{equation}
+  \mathbb{E}[R \mid c] \;=\; \frac{c+1}{\lbase}
+\end{equation}
+mentre la \textbf{moda} della posteriore (che con prior uniforme coincide con l'MLE)
+è $c/\lbase$. La differenza $+1/\lbase$ è trascurabile per $c \gg 1$ ma significativa
+per $c$ piccolo.
+
+\begin{osservazione}
+In linea di principio, per questa distribuzione posteriore (Gamma) la stima esatta
+potrebbe essere calcolata analiticamente senza Metropolis. Il Metropolis è usato
+nella metodologia ISS perché il modello reale include correlazioni tra giorni diversi
+e prior non uniformi che rendono la distribuzione posteriore intractable analiticamente.
+Nella nostra implementazione semplificata (stima giorno per giorno indipendente),
+il Metropolis approssima correttamente la Gamma posteriore.
+\end{osservazione}
+
+% ===========================================================================
+\section{L'algoritmo Metropolis}
+\label{sec:metro}
+% ===========================================================================
+
+\subsection{Principio generale: catene di Markov Monte Carlo}
+
+L'algoritmo \textbf{Metropolis} (Metropolis et al., 1953) è il capostipite dei metodi
+MCMC (Markov Chain Monte Carlo). Il problema che risolve è:
+
+\begin{definizione}
+Sia $\mathcal{X}$ lo spazio dei valori ammissibili per il parametro di interesse
+(nel nostro caso $\mathcal{X} = \mathbb{R}_{>0}$, i reali positivi, poiché $R > 0$).
+Sia $\pi: \mathcal{X} \to \mathbb{R}_{\ge 0}$ una \emph{distribuzione target} ---
+la distribuzione da cui vogliamo campionare --- di cui si conosce solo la forma
+funzionale, non la costante di normalizzazione.
+
+Il problema è costruire una \textbf{catena di Markov}
+$\{X^{(0)}, X^{(1)}, \ldots, X^{(N)}\}$ su $\mathcal{X}$, ovvero una successione
+di valori tali che $X^{(k)}$ dipende dal passato solo tramite $X^{(k-1)}$, la cui
+\textbf{distribuzione stazionaria} sia $\pi$. Con ``distribuzione stazionaria''
+si intende che, per $k$ sufficientemente grande, la distribuzione di $X^{(k)}$
+converge a $\pi$ indipendentemente dal punto di partenza $X^{(0)}$.
+\end{definizione}
+
+Nel nostro contesto: la distribuzione target $\pi$ è la \textbf{distribuzione a
+posteriori} $\pi(R \mid c)$ introdotta nella Sezione~\ref{sec:bayes}, ovvero:
+\begin{equation}
+  \pi(R) \;\propto\; e^{\ell(R)} \;=\; e^{\,c\log R\,-\,R\lbase} \;=\; R^c\,e^{-R\lbase}
+\end{equation}
+(scriviamo $\pi(R)$ per brevità, con $c$ e $\lbase$ fissi per il giorno $t$ corrente).
+La costante di normalizzazione $\int_0^\infty R^c e^{-R\lbase}\,dR$ non viene mai
+calcolata: Metropolis la evita interamente, come si vede dal passo~(b) qui sotto.
+
+\subsection{L'algoritmo passo per passo}
+
+\textbf{Inizializzazione:} $R^{(0)} = 1.0$ (soglia epidemica, valore neutro).
+
+\medskip
+\textbf{Passo $k$} ($k = 1, 2, \ldots, N_{\mathrm{iter}}$):
+
+\begin{enumerate}[label=\textbf{\alph*)}]
+  \item \textbf{Proposta.} Si campiona un candidato:
+    \begin{equation}
+      R^* = R^{(k-1)} + U(-\delta,\, +\delta), \qquad \delta = 1.5
+      \label{eq:proposta}
+    \end{equation}
+    dove $U(-\delta, +\delta)$ è una variabile uniforme sull'intervallo $(-\delta, +\delta)$.
+    La distribuzione di proposta è \textbf{simmetrica}: $q(R^* \mid R) = q(R \mid R^*)$,
+    proprietà essenziale per Metropolis (non sarebbe necessaria per Metropolis--Hastings,
+    che è la versione più generale).
+
+  \item \textbf{Log-ratio.} Se $R^* > 0$, si calcola:
+    \begin{align}
+      \log\rho &= \ell(R^*) - \ell(R^{(k-1)}) \notag \\
+               &= \bigl[c\log(R^*\lbase) - R^*\lbase\bigr]
+                  - \bigl[c\log(R^{(k-1)}\lbase) - R^{(k-1)}\lbase\bigr] \notag \\
+               &= c\,\log\!\frac{R^*}{R^{(k-1)}} - \lbase\!\left(R^* - R^{(k-1)}\right)
+      \label{eq:logrho}
+    \end{align}
+    Il termine $c\,\log\lbase$ è presente sia in $\ell(R^*)$ che in $\ell(R^{(k-1)})$
+    e si cancella esattamente. Questo significa che $\lbase$ entra nel log-ratio
+    solo attraverso il termine lineare $-\lbase(R^* - R^{(k-1)})$.
+
+  \item \textbf{Accettazione/rifiuto.} Si pone:
+    \begin{equation}
+      R^{(k)} =
+      \begin{cases}
+        R^{(k-1)}              & \text{se } R^* \le 0 \text{ (rifiuto forzato)} \\
+        R^*                    & \text{se } \log\rho \ge 0 \text{ (accettazione certa)} \\
+        R^* \text{ con prob.\ } e^{\log\rho} & \text{se } \log\rho < 0 \\
+        R^{(k-1)}              & \text{altrimenti (rifiuto)}
+      \end{cases}
+      \label{eq:accettazione}
+    \end{equation}
+    In pratica: si genera $u \sim U(0,1)$ e si accetta se $\log u < \log\rho$
+    (equivalente a $u < e^{\log\rho}$, ma numericamente più stabile per evitare
+    overflow di $e^x$ per $\log\rho$ molto negativo).
+\end{enumerate}
+
+\textbf{Burn-in:} i primi $N_{\mathrm{burnin}} = 500$ valori sono scartati.
+Durante il burn-in la catena ``si avvicina'' alla zona di alta probabilità a partire
+dal punto iniziale $R=1$ (che potrebbe essere lontano dalla moda della posteriore).
+
+\textbf{Stima finale:}
+\begin{equation}
+  \widehat{R}(t) \;=\; \frac{1}{N_{\mathrm{iter}} - N_{\mathrm{burnin}}} \sum_{k=N_{\mathrm{burnin}}+1}^{N_{\mathrm{iter}}} R^{(k)}
+  \;=\; \frac{1}{4500} \sum_{k=501}^{5000} R^{(k)}
+  \label{eq:stima}
+\end{equation}
+
+\subsection{Interpretazione fisica del log-ratio}
+
+La formula~\eqref{eq:logrho} ha un'interpretazione intuitiva chiara. Separando i due termini:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.5}
+\begin{tabular}{lll}
+\toprule
+Termine & Segno tipico & Effetto sulla catena \\
+\midrule
+$c\,\log(R^*/R^{(k-1)})$ & $> 0$ se $R^* > R$ & Spinge verso $R$ più alto se ci sono casi \\
+$-\lbase(R^* - R^{(k-1)})$ & $< 0$ se $R^* > R$ & Frena l'aumento proporzionalmente a $\lbase$ \\
+\midrule
+Bilancio & 0 & Equilibrio in $R^* = R_{\mathrm{MLE}} = c/\lbase$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+In $R = R_{\mathrm{MLE}} = c/\lbase$, il log-ratio per qualsiasi spostamento $\epsilon$ è:
+\begin{equation}
+  \log\rho = c\,\log\!\frac{R_{\mathrm{MLE}}+\epsilon}{R_{\mathrm{MLE}}} - \lbase\,\epsilon
+  \approx c\,\frac{\epsilon}{R_{\mathrm{MLE}}} - \lbase\,\epsilon
+  = \epsilon\!\left(\frac{c}{R_{\mathrm{MLE}}} - \lbase\right) = 0
+\end{equation}
+confermando che l'MLE è il punto stazionario.
+
+% ===========================================================================
+\section{Garanzia teorica: bilancio dettagliato e convergenza}
+% ===========================================================================
+
+\subsection{Il problema: costruire $W$ data $\Pi$}
+
+L'algoritmo Metropolis nasce come soluzione a un problema generale che condivide
+la stessa logica dei processi di Markov discreti. Si vuole calcolare il
+\textbf{valore di aspettazione} di una funzione $f$ rispetto a una distribuzione
+target $\Pi$:
+\begin{equation}
+  \langle f(X) \rangle \;=\; \sum_i f(X_i)\,\Pi_i
+  \label{eq:aspettazione_mc}
+\end{equation}
+dove la somma è su tutte le possibili configurazioni $X_i$, pesata dalla
+distribuzione di probabilità $\Pi$.
+
+Si costruisce a tal fine una \textbf{catena di Markov} con matrice di transizione $W$,
+i cui elementi $W_{ij} = P(i \leftarrow j)$ sono probabilità di transizione dallo
+stato $j$ allo stato $i$. Valgono le proprietà $W_{ij} \ge 0$ e
+$\sum_i W_{ij} = 1$ per ogni $j$.
+
+Iterando a partire da una distribuzione iniziale $P_0$, la distribuzione dopo $N$ passi è
+$P^{(N)} = W^N P_0$. Se vale la condizione di \textbf{stazionarietà} $W\Pi = \Pi$
+(ovvero $\Pi$ è l'autovettore di $W$ con autovalore $1$), allora per ergodicità:
+\begin{equation}
+  P^{(N)} = W^N P_0 \;\xrightarrow{\;N \to \infty\;}\; \Pi
+\end{equation}
+indipendentemente dal punto di partenza $P_0$. Grazie a questo, possiamo
+\textbf{sostituire medie temporali} sull'evoluzione asintotica della catena con
+\textbf{medie su $\Pi$}: questo è il principio fondamentale di tutti i metodi MCMC.
+
+\begin{osservazione}[title=Problema fondamentale di MCMC]
+\textbf{Data} la distribuzione target $\Pi$ (di cui si conosce la forma funzionale,
+non la costante di normalizzazione), come si costruisce una matrice di transizione
+$W$ tale che $W\Pi = \Pi$?
+\end{osservazione}
+
+Una \textbf{condizione sufficiente} (non necessaria) per soddisfare $W\Pi = \Pi$
+è il bilancio dettagliato, derivato nel paragrafo seguente.
+
+% ---------------------------------------------------------------------------
+\subsection{Il bilancio dettagliato come condizione sufficiente}
+
+La ragione per cui l'algoritmo Metropolis funziona è la soddisfazione della condizione
+di \textbf{bilancio dettagliato} (detailed balance). Questa condizione garantisce che la
+distribuzione target $\pi$ è una distribuzione stazionaria della catena di Markov.
+
+\begin{definizione}[title=Definizione: bilancio dettagliato]
+Una catena di Markov con probabilità di transizione $T(x \to y)$ soddisfa il bilancio
+dettagliato rispetto a $\pi$ se:
+\begin{equation}
+  \pi(x)\, T(x \to y) \;=\; \pi(y)\, T(y \to x) \qquad \forall\, x, y \in \mathcal{X}
+  \label{eq:bd}
+\end{equation}
+\end{definizione}
+
+Per Metropolis, la probabilità di transizione (per proposta simmetrica) è:
+\begin{equation}
+  T(R \to R^*) \;=\; q(R^*\mid R)\cdot \alpha(R, R^*)
+  \;=\; q(R^*\mid R)\cdot \min\!\left(1,\, \frac{\pi(R^*)}{\pi(R)}\right)
+\end{equation}
+dove i due fattori corrispondono alle due fasi sequenziali dell'algoritmo:
+\begin{itemize}
+  \item $q(R^*\mid R)$: \textbf{probabilità di proposta} --- con quale probabilità l'algoritmo
+        estrae $R^*$ come candidato, dato che si trova in $R$. Nel nostro caso è la distribuzione
+        uniforme $U(R-\delta,\, R+\delta)$: non dipende da $\pi$ e non sa nulla della
+        distribuzione target.
+  \item $\alpha(R, R^*)$: \textbf{probabilità di accettazione} --- dato che $R^*$ è stato proposto,
+        con quale probabilità viene accettato. Questa dipende da $\pi$: vale $1$ se
+        $R^*$ è più probabile del corrente, meno di $1$ altrimenti.
+\end{itemize}
+Il prodotto $q \cdot \alpha$ è la probabilità che entrambe le fasi abbiano successo,
+ovvero che la catena si sposti effettivamente da $R$ a $R^*$.
+
+\textbf{Verifica del bilancio dettagliato.} Poiché $q$ è simmetrica ($q(R^*\mid R) = q(R\mid R^*)$),
+dividiamo per $q$ e verifichiamo:
+\begin{equation}
+  \pi(R)\cdot \min\!\left(1,\, \frac{\pi(R^*)}{\pi(R)}\right)
+  \;=\;
+  \pi(R^*)\cdot \min\!\left(1,\, \frac{\pi(R)}{\pi(R^*)}\right)
+\end{equation}
+
+\textbf{Caso 1}: $\pi(R^*) \ge \pi(R)$.
+\begin{align*}
+  \text{Lato sinistro} &= \pi(R)\cdot \frac{\pi(R^*)}{\pi(R)} = \pi(R^*) \\
+  \text{Lato destro}  &= \pi(R^*)\cdot 1 = \pi(R^*) \quad \checkmark
+\end{align*}
+
+\textbf{Caso 2}: $\pi(R^*) < \pi(R)$ (simmetrico per scambio di $R$ e $R^*$). \checkmark
+
+Il bilancio dettagliato implica che $\pi$ è una distribuzione stazionaria. Affinché
+sia anche l'unica (condizione di \emph{ergodicità}), è sufficiente che la catena sia:
+\begin{itemize}
+  \item \textbf{irriducibile}: da qualsiasi punto si può raggiungere qualsiasi regione
+        con probabilità positiva (garantito dalla proposta uniforme con $\delta = 1.5$,
+        che copre un intervallo ampio intorno al valore corrente);
+  \item \textbf{aperiodica}: non ci sono cicli deterministici (garantito dal fatto che
+        ci sono proposte che vengono rifiutate, quindi la catena può rimanere ferma).
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\subsection{Derivazione della probabilità di accettazione: $F(z) = \min(1,z)$}
+
+Si fattorizza la probabilità di transizione in due contributi:
+\begin{equation}
+  W_{ij} \;=\; P^{(0)}_{ij} \cdot a_{ij}
+\end{equation}
+dove $P^{(0)}_{ij}$ è la \textbf{probabilità di proporre} la mossa $j \to i$
+e $a_{ij} \in [0,1]$ è la \textbf{probabilità di accettare} la proposta.
+
+Sostituendo nella condizione di bilancio dettagliato $W_{ij}\Pi_j = W_{ji}\Pi_i$:
+\begin{equation}
+  P^{(0)}_{ij}\, a_{ij}\, \Pi_j \;=\; P^{(0)}_{ji}\, a_{ji}\, \Pi_i
+\end{equation}
+da cui si ottiene il rapporto tra le probabilità di accettazione:
+\begin{equation}
+  \frac{a_{ij}}{a_{ji}} \;=\; \frac{P^{(0)}_{ji}\,\Pi_i}{P^{(0)}_{ij}\,\Pi_j}
+  \label{eq:rapporto_acc}
+\end{equation}
+
+\textbf{Proposta simmetrica.} Se $P^{(0)}_{ij} = P^{(0)}_{ji}$ (come la distribuzione
+$U(-\delta, +\delta)$ del nostro algoritmo), i termini di proposta si cancellano:
+\begin{equation}
+  \frac{a_{ij}}{a_{ji}} \;=\; \frac{\Pi_i}{\Pi_j}
+\end{equation}
+
+Si cerca dunque una funzione $F:[0,+\infty) \to [0,1]$ tale che, posto $z = \Pi_i/\Pi_j$:
+\begin{equation}
+  a_{ij} = F(z), \quad a_{ji} = F(z^{-1}), \qquad
+  \text{con vincolo} \;\frac{F(z)}{F(z^{-1})} = z
+  \label{eq:condF}
+\end{equation}
+La soluzione più semplice alla~\eqref{eq:condF} è:
+\begin{equation}
+  \boxed{F(z) \;=\; \min(1,\,z)}
+  \label{eq:Fmin}
+\end{equation}
+
+\textbf{Verifica diretta:}
+\begin{itemize}
+  \item $z > 1$:\; $F(z) = 1$,\; $F(z^{-1}) = z^{-1}$;\; $F(z)/F(z^{-1}) = z$ \checkmark
+  \item $z < 1$:\; $F(z) = z$,\; $F(z^{-1}) = 1$;\; $F(z)/F(z^{-1}) = z$ \checkmark
+  \item $z = 1$:\; $F(z) = F(z^{-1}) = 1$;\; $F(z)/F(z^{-1}) = 1 = z$ \checkmark
+\end{itemize}
+
+L'algoritmo Metropolis risultante è dunque:
+\begin{enumerate}
+  \item Proponi la mossa $j \to i$ con distribuzione simmetrica
+  \item Calcola $z = \Pi_i / \Pi_j$
+  \item Accetta con probabilità $\min(1, z)$:
+        \begin{itemize}
+          \item se $\Pi_i \ge \Pi_j$: accetta sempre (stato proposto più probabile)
+          \item se $\Pi_i < \Pi_j$: accetta con probabilità $\Pi_i/\Pi_j < 1$
+        \end{itemize}
+\end{enumerate}
+
+Intuitivamente: le mosse verso stati più probabili sono sempre accettate; quelle verso
+stati meno probabili sono accettate tanto meno quanto più la probabilità dello stato
+proposto è inferiore a quella dello stato corrente.
+
+\begin{osservazione}
+Nel caso continuo del nostro algoritmo, $z = \pi(R^*)/\pi(R^{(k-1)}) = e^{\log\rho}$
+(con $\log\rho$ definito dalla~\eqref{eq:logrho}). La condizione di accettazione
+$\log u < \log\rho$ è equivalente a $u < e^{\log\rho} = z$, ovvero
+$u < \min(1, z)$: esattamente la regola $F(z) = \min(1, z)$ derivata qui sopra.
+\end{osservazione}
+
+\subsection{Velocità di convergenza}
+
+La velocità con cui la catena converge alla distribuzione stazionaria dipende
+dall'\textbf{autocorrelazione della catena}, quantificata dal \emph{tempo di mescolamento}.
+Con una proposta uniforme di ampiezza $\delta = 1.5$:
+
+\begin{itemize}
+  \item Se $\delta$ è troppo piccola: alta accettazione, ma la catena si muove lentamente
+        (esplorazione inefficiente).
+  \item Se $\delta$ è troppo grande: bassa accettazione (molte proposte finiscono in zone
+        di bassa probabilità), movimenti rari ma grandi.
+  \item Il valore ottimale per una target Gaussiana è $\delta \approx 2.38\,\sigma$
+        (regola di Gelman et al., 1996), che porta a un tasso di accettazione del 44\%.
+\end{itemize}
+
+Con $\delta = 1.5$ e $R(t)$ tipicamente in $[0.5, 3]$, ci si aspetta un tasso di
+accettazione nell'intervallo 20--50\% (da verificare empiricamente).
+
+% ===========================================================================
+\section{Indipendenza delle stime giornaliere}
+% ===========================================================================
+
+Un aspetto fondamentale del Metodo~2 è che la stima di $R(t)$ per ciascun giorno $t$
+è \textbf{completamente indipendente} dalle stime degli altri giorni. Per ogni $t$:
+
+\begin{enumerate}
+  \item Si fissa $c = C(t)$ (osservazione del giorno $t$).
+  \item Si calcola $\lbase(t)$ dalla storia passata $C(t-1), \ldots, C(t-25)$.
+  \item Si esegue una catena Metropolis di 5000 passi per campionare $\pi(R \mid c)$.
+  \item Si stima $R(t)$ come media della catena post burn-in.
+\end{enumerate}
+
+La storia passata entra nella stima \emph{solo} attraverso $\lbase(t)$, che viene
+trattata come una costante per l'ottimizzazione del giorno $t$. Questo è molto diverso
+da metodi come il filtro di Kalman o il smoothing per serie temporali, in cui la stima
+di $R(t)$ dipende anche dall'informazione del futuro.
+
+\textbf{Conseguenza pratica:} il calcolo è parallelizzabile -- si potrebbero eseguire
+le $n - \Smax$ catene Metropolis in parallelo su $n - \Smax$ core separati.
+
+% ===========================================================================
+\section{Cancellazione della scala}
+% ===========================================================================
+
+\subsection{Il problema della sorgente dati}
+
+La metodologia ISS originale utilizza i \emph{casi sintomatici} $S(t)$ (file non
+disponibile pubblicamente come CSV scaricabile). Il codice usa invece
+\texttt{nuovi\_positivi} DPC, denotato $C_{\mathrm{DPC}}(t)$.
+
+I due dataset differiscono per un fattore di scala (approssimativamente costante):
+\begin{equation}
+  C_{\mathrm{DPC}}(t) \;\approx\; k \cdot S(t), \qquad k > 1
+  \label{eq:scala}
+\end{equation}
+Il fattore $k > 1$ riflette il fatto che i nuovi positivi includono anche i
+pre-sintomatici e gli asintomatici diagnosticati tramite contact tracing.
+
+\subsection{Dimostrazione della cancellazione}
+
+Calcoliamo la base per i dati DPC:
+\begin{equation}
+  \lbase^{\mathrm{DPC}}(t) = \sum_{s=1}^{25} \phi(s)\, C_{\mathrm{DPC}}(t-s)
+  = \sum_{s=1}^{25} \phi(s)\, k\, S(t-s)
+  = k \sum_{s=1}^{25} \phi(s)\, S(t-s)
+  = k \cdot \lbase^{\mathrm{ISS}}(t)
+\end{equation}
+
+Il fattore $k$ moltiplica sia il numeratore che il denominatore dell'MLE:
+\begin{equation}
+  R_{\mathrm{MLE}}^{\mathrm{DPC}} = \frac{C_{\mathrm{DPC}}(t)}{\lbase^{\mathrm{DPC}}(t)}
+  = \frac{k\,S(t)}{k\,\lbase^{\mathrm{ISS}}(t)}
+  = \frac{S(t)}{\lbase^{\mathrm{ISS}}(t)}
+  = R_{\mathrm{MLE}}^{\mathrm{ISS}}
+  \label{eq:cancel}
+\end{equation}
+
+Il fattore di scala si cancella esattamente nel rapporto. La stima di $R(t)$ è
+identica per le due sorgenti dati (a parità di modello statistico). \qquad $\square$
+
+\subsection{Differenza statistica}
+
+La varianza dell'MLE Poisson è:
+\begin{equation}
+  \mathrm{Var}[R_{\mathrm{MLE}}] \approx \frac{R(t)}{\lbase(t)} = \frac{R(t)^2}{C(t)}
+\end{equation}
+(approssimazione di Cramér--Rao). Poiché $C_{\mathrm{DPC}} = k\,S$, i dati DPC producono
+$\lbase^{\mathrm{DPC}} = k\,\lbase^{\mathrm{ISS}}$ e quindi:
+\begin{equation}
+  \mathrm{Var}[R^{\mathrm{DPC}}_{\mathrm{MLE}}] = \frac{R(t)}{k\,\lbase^{\mathrm{ISS}}(t)}
+  = \frac{1}{k}\, \mathrm{Var}[R^{\mathrm{ISS}}_{\mathrm{MLE}}]
+\end{equation}
+Usare i dati DPC (più numerosi per il fattore $k > 1$) produce
+\textbf{intervalli di confidenza più stretti}: un vantaggio inatteso della sostituzione.
+
+% ===========================================================================
+\section{Post-processing: media mobile causale}
+% ===========================================================================
+
+La stima $\widehat{R}(t)$ grezza presenta ancora oscillazioni per due motivi:
+
+\begin{enumerate}
+  \item \textbf{Rumore osservativo}: le segnalazioni epidemiologiche hanno forti
+        oscillazioni settimanali (meno tamponi nel weekend, aggiornamenti batch il lunedì).
+        Questo rumore entra in $C(t)$ e quindi in $\widehat{R}(t)$.
+
+  \item \textbf{Fluttuazioni Monte Carlo}: la catena Metropolis di 4500 passi ha una
+        varianza residua piccola ($\sigma \approx 3 \times 10^{-3}$, trascurabile rispetto
+        al rumore osservativo).
+\end{enumerate}
+
+Si applica una \textbf{media mobile causale a 7 giorni}:
+\begin{equation}
+  R_{\mathrm{MC}}(t) \;=\; \frac{1}{7}\sum_{k=0}^{6} \widehat{R}(t-k)
+  \;=\; \frac{\widehat{R}(t) + \widehat{R}(t-1) + \cdots + \widehat{R}(t-6)}{7}
+  \label{eq:smooth}
+\end{equation}
+
+Il termine \textbf{causale} (o \emph{one-sided}) significa che la finestra guarda
+solo al passato e al presente: non vengono mai usati valori futuri $\widehat{R}(t+1), \ldots$.
+In un sistema di sorveglianza in tempo reale, i dati del futuro non sono disponibili;
+la scelta causale è quindi l'unica fisicamente sensata.
+
+Il periodo di 7 giorni è scelto per attenuare il ciclo settimanale delle segnalazioni
+(periodo di 7 giorni): la media mobile elimina esattamente le componenti periodiche
+il cui periodo divide la finestra.
+
+% ===========================================================================
+\section{Il ritardo strutturale: confronto con il dato INFN}
+% ===========================================================================
+
+I dati ufficiali INFN/CovidStat usano la \textbf{data di inizio sintomi} (stimata tramite
+un modello di nowcasting). Il Metodo~2 usa la data di referto DPC, sistematicamente
+più tardiva di circa 5--10 giorni.
+
+Paradossalmente, il Metodo~2 produce una stima di $R(t)$ che \textbf{anticipa} il dato
+INFN di circa una settimana. Il motivo è sottile:
+
+\begin{itemize}
+  \item Il dato INFN al giorno $t$ include anche le \emph{correzioni retroattive} dei
+        giorni precedenti (i casi con data di inizio sintomi nel passato ma segnalati
+        con ritardo). Questo introduce un ritardo di pubblicazione di circa una settimana.
+  \item Il Metodo~2 usa i casi \emph{così come appaiono nel database DPC} al giorno $t$,
+        senza aspettare correzioni retroattive. La stima è quindi più tempestiva e, poiché
+        $\lbase(t)$ dipende solo dai casi passati rispetto a $t$, non subisce aggiornamenti
+        retroattivi.
+\end{itemize}
+
+% ===========================================================================
+\section{Confronto sistematico con il Metodo 1 (SIR)}
+% ===========================================================================
+
+\begin{center}
+\renewcommand{\arraystretch}{1.6}
+\begin{tabular}{p{4cm}p{5cm}p{5cm}}
+\toprule
+\textbf{Aspetto} & \textbf{Metodo 1 --- SIR} & \textbf{Metodo 2 --- Metropolis} \\
+\midrule
+Modello & Deterministico (formula approssimata) & Probabilistico (Poisson) \\
+Dipendenza da $\gamma$ & Esplicita: $R \approx 1 + T_R\,\Delta I/I$ & Assente \\
+Dist. tempi generazione & Implicita (finestra fissa $T_R$) & Esplicita: Gamma($\alpha$=1.87, $\theta$=3.57) \\
+Ritardo vs INFN & $+1$ settimana (data referto $>$ data sintomi) & $-1$ settimana (anticipo) \\
+Errore max vs INFN & $0.2$--$0.6$ & $0.20$--$0.27$ \\
+Sensibilità al rumore & Alta (senza pre-smoothing) & Moderata (distribuita su 25 giorni) \\
+Costo computazionale & Basso (formula algebrica) & Alto ($\sim$5 min su MATLAB) \\
+Funziona senza $T_R$ & No & Sì \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ===========================================================================
+\section{Riepilogo completo}
+% ===========================================================================
+
+\begin{riepilogo}[title=Pipeline del Metodo 2]
+\begin{align*}
+&\textbf{Input:} \quad C(1), C(2), \ldots, C(n) \quad \text{[nuovi\_positivi DPC]} \\
+&\quad \phi(s) \quad s=1,\ldots,25 \quad \text{[Gamma(1.87, 3.57), discretizzata, normalizzata]} \\[6pt]
+&\textbf{Per ogni } t = 26, 27, \ldots, n\textbf{:} \\
+&\quad \lbase(t) = \sum_{s=1}^{25} \phi(s)\, C(t-s) \\
+&\quad \text{Catena Metropolis, } N_{\mathrm{iter}}=5000,\; N_{\mathrm{burnin}}=500,\; \delta=1.5\text{:} \\
+&\qquad \text{target: } \pi(R) \propto \exp\!\bigl[C(t)\log R - R\lbase(t)\bigr] \\
+&\quad \widehat{R}(t) = \frac{1}{4500}\sum_{k=501}^{5000} R^{(k)} \\[6pt]
+&\textbf{Post-processing:} \\
+&\quad R_{\mathrm{MC}}(t) = \frac{1}{7}\sum_{k=0}^{6} \widehat{R}(t-k) \quad \text{[media mobile causale 7 giorni]}
+\end{align*}
+\end{riepilogo}
+
+\end{document}

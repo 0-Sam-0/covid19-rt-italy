@@ -1,0 +1,40 @@
+# --- LaTeX build artifacts ---
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.bbl
+*.blg
+
+# --- Archives ---
+*.rar
+*.zip
+*.7z
+
+# --- MATLAB / Octave ---
+*.asv
+*.m~
+*.autosave
+octave-workspace
+
+# --- OS ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+._*
+
+# --- Editors ---
+.vscode/
+.idea/
+*.swp
+
+# --- Tooling ---
+.claude/
+CLAUDE.md
